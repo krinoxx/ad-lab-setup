@@ -201,15 +201,15 @@ Set-MpPreference -DisableRealtimeMonitoring $true
  
 **Verificación:**
  
-![ipconfig WIN-PC01](./docs/screenshots/fase2-01-ipconfig-pc01.PNG)
+![ipconfig WIN-PC01](./docs/screenshots/fase2-01-ipconfig-pc01.png)
 
 *IP estática asignada a WIN-PC01 — 192.168.100.21*
  
-![ipconfig WIN-PC02](./docs/screenshots/fase2-02-ipconfig-pc02.PNG)
+![ipconfig WIN-PC02](./docs/screenshots/fase2-02-ipconfig-pc02.png)
 
 *IP estática asignada a WIN-PC02 — 192.168.100.22*
  
-![Equipos en AD](./docs/screenshots/fase2-03-computers-ad.PNG)
+![Equipos en AD](./docs/screenshots/fase2-03-computers-ad.png)
 
 *DC01, PC01 y PC02 registrados en el dominio*
  
