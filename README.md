@@ -217,8 +217,53 @@ Set-MpPreference -DisableRealtimeMonitoring $true
  
 ### Fase 3 — Kali Linux (atacante)
  
-> 🔄 *En progreso*
+#### Red — IP estática
  
+```bash
+sudo nano /etc/network/interfaces
+```
+ 
+```
+auto eth0
+iface eth0 inet static
+    address 192.168.100.50
+    netmask 255.255.255.0
+    gateway 192.168.100.1
+    dns-nameservers 192.168.100.10
+```
+ 
+```bash
+sudo systemctl restart networking
+```
+ 
+#### VMware Tools
+ 
+```bash
+sudo apt install -y open-vm-tools-desktop
+sudo reboot
+```
+ 
+#### Verificación de conectividad
+ 
+```bash
+ping -c 3 192.168.100.10
+nslookup lab.local 192.168.100.10
+```
+ 
+**Verificación:**
+ 
+![ip a Kali](./docs/screenshots/fase3-01-ipconfig-kali.png)
+
+*IP estática asignada a Kali — 192.168.100.50*
+ 
+![Ping al DC](./docs/screenshots/fase3-02-ping-dc.png)
+
+*Conectividad con WIN-DC01 confirmada*
+ 
+![nslookup lab.local](./docs/screenshots/fase3-03-nslookup.png)
+
+*Resolución DNS del dominio lab.local desde Kali*
+
 ---
  
 ## ⚔️ Ataques documentados
