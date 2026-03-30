@@ -133,7 +133,25 @@ New-ADUser -Name "Local Admin" -SamAccountName "localadmin" -UserPrincipalName "
 Add-ADGroupMember -Identity "Admins. del dominio" -Members "localadmin"
 ```
  
-> 📸 **Screenshots de verificación:** `docs/screenshots/fase1-*`
+**Verificación:**
+ 
+![ipconfig DC](./docs/screenshots/fase1-01-ipconfig.png)
+*IP estática asignada al DC — 192.168.100.10*
+ 
+![Dominio activo](./docs/screenshots/fase1-02-domain-activo.png)
+*lab.local promovido correctamente*
+ 
+![DCDiag OK](./docs/screenshots/fase1-03-dcdiag-ok.png)
+*Servicios del DC sin errores*
+ 
+![DHCP](./docs/screenshots/fase1-04-dhcp-scope.png)
+*Scope DHCP activo — rango 192.168.100.100-200*
+ 
+![SPN svc-sql](./docs/screenshots/fase1-05-spn-svc-sql.png)
+*Service account con SPN registrado — objetivo Kerberoasting*
+ 
+![Usuarios AD](./docs/screenshots/fase1-06-usuarios-ad.png)
+*Usuarios del laboratorio creados y habilitados*
  
 ---
  
