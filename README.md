@@ -163,7 +163,55 @@ Add-ADGroupMember -Identity "Admins. del dominio" -Members "localadmin"
  
 ### Fase 2 — Clientes Windows 10 (WIN-PC01 / WIN-PC02)
  
-> 🔄 *En progreso*
+#### Red — IPs estáticas
+ 
+**WIN-PC01:**
+```powershell
+Remove-NetRoute -InterfaceAlias "Ethernet0" -DestinationPrefix "0.0.0.0/0" -Confirm:$false
+New-NetIPAddress -InterfaceAlias "Ethernet0" -IPAddress 192.168.100.21 -PrefixLength 24 -DefaultGateway 192.168.100.1
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses 192.168.100.10
+```
+ 
+**WIN-PC02:**
+```powershell
+Remove-NetRoute -InterfaceAlias "Ethernet0" -DestinationPrefix "0.0.0.0/0" -Confirm:$false
+New-NetIPAddress -InterfaceAlias "Ethernet0" -IPAddress 192.168.100.22 -PrefixLength 24 -DefaultGateway 192.168.100.1
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses 192.168.100.10
+```
+ 
+#### Unir al dominio
+ 
+```powershell
+Add-Computer -DomainName "lab.local" -Credential (Get-Credential) -Restart
+# Credenciales: LAB\Administrador / P@ssw0rd123!
+```
+ 
+#### Añadir localadmin como admin local (en cada cliente)
+ 
+```powershell
+Add-LocalGroupMember -Group "Administradores" -Member "LAB\localadmin"
+```
+ 
+#### Deshabilitar Firewall y Defender (en cada cliente)
+ 
+```powershell
+Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
+Set-MpPreference -DisableRealtimeMonitoring $true
+```
+ 
+**Verificación:**
+ 
+![ipconfig WIN-PC01](./docs/screenshots/fase2-01-ipconfig-pc01.PNG)
+
+*IP estática asignada a WIN-PC01 — 192.168.100.21*
+ 
+![ipconfig WIN-PC02](./docs/screenshots/fase2-02-ipconfig-pc02.PNG)
+
+*IP estática asignada a WIN-PC02 — 192.168.100.22*
+ 
+![Equipos en AD](./docs/screenshots/fase2-03-computers-ad.PNG)
+
+*DC01, PC01 y PC02 registrados en el dominio*
  
 ---
  
