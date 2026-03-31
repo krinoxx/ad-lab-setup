@@ -273,11 +273,71 @@ nslookup lab.local 192.168.100.10
  
 | Técnica | Herramienta | Estado |
 |---|---|---|
+| Enumeración AD | BloodHound CE + bloodhound-python | ✅ Completado |
 | Kerberoasting | Impacket GetUserSPNs + John the Ripper | ✅ Completado |
 | Pass-the-Hash | Impacket secretsdump + CrackMapExec | ✅ Completado |
 | AS-REP Roasting | Impacket GetNPUsers + John the Ripper | ✅ Completado |
 | DCSync | Impacket secretsdump | 🔄 En progreso |
-| Enumeración AD | BloodHound + bloodhound-python | 📋 Pendiente |
+ 
+---
+ 
+## 🔍 Enumeración con BloodHound
+ 
+### ¿Qué es?
+ 
+BloodHound mapea todas las relaciones del dominio — usuarios, grupos, permisos, rutas de ataque — y las visualiza en un grafo. Es el primer paso en cualquier pentest de AD: sin enumeración no sabes qué atacar ni cómo llegar a Domain Admin.
+ 
+### Ejecución
+ 
+```bash
+# Recopilar datos del dominio — cualquier usuario válido sirve
+bloodhound-python \
+  -u jsmith \
+  -p 'Password1' \
+  -d lab.local \
+  -ns 192.168.100.10 \
+  -c all \
+  --zip
+ 
+# Arrancar BloodHound CE
+bloodhound --no-sandbox
+ 
+# Importar el .zip generado desde la interfaz web
+# http://127.0.0.1:8080
+```
+ 
+### Query — encontrar cuentas Kerberoastables
+ 
+```cypher
+MATCH (u:User {hasspn:true}) RETURN u
+```
+ 
+### Resultado
+ 
+```
+SVC-SQL@LAB.LOCAL  → Kerberoastable
+KRBTGT@LAB.LOCAL   → Kerberoastable
+```
+ 
+**Verificación:**
+ 
+![BloodHound collect](./docs/screenshots/fase4-01-bloodhound-collect.png)
+
+*bloodhound-python recopila 3 equipos, 8 usuarios y 52 grupos*
+ 
+![BloodHound grafo](./docs/screenshots/fase4-02-bloodhound-graph.png)
+
+*Dominio LAB.LOCAL mapeado en BloodHound CE*
+ 
+![Kerberoastable accounts](./docs/screenshots/fase4-03-kerberoastable.png)
+
+*Query Cypher identifica SVC-SQL como objetivo Kerberoastable*
+ 
+### Mitigación
+ 
+- Principio de mínimo privilegio — revisar ACLs del dominio regularmente
+- Limitar qué usuarios pueden hacer consultas LDAP masivas
+- Monitorizar consultas LDAP anómalas con un SIEM
  
 ---
  
@@ -397,6 +457,7 @@ impacket-GetNPUsers lab.local/asrepuser \
  
 # Crackear
 john asrep.hash --wordlist=/usr/share/wordlists/rockyou.txt
+john asrep.hash --show
 ```
  
 ### Resultado
@@ -432,21 +493,15 @@ asrepuser : Welcome1!
  
 ---
  
-## 🔍 Enumeración con BloodHound
- 
-> 📋 *Pendiente*
- 
----
- 
 ## 🛡️ Resumen de mitigaciones
  
 | Ataque | Mitigación |
 |---|---|
-| Kerberoasting | Contraseñas +25 caracteres en service accounts · Usar gMSA |
-| Pass-the-Hash | Deshabilitar NTLM · Activar Credential Guard · Protected Users |
+| Enumeración BloodHound | Mínimo privilegio · Limitar consultas LDAP · Monitorizar con SIEM |
+| Kerberoasting | Contraseñas +25 caracteres · Usar gMSA |
+| Pass-the-Hash | Deshabilitar NTLM · Credential Guard · Protected Users |
 | AS-REP Roasting | Forzar pre-autenticación Kerberos · Auditar cuentas periódicamente |
 | DCSync | Restringir permisos de replicación (solo DCs reales) |
-| BloodHound / Enumeración | Principio de mínimo privilegio · Auditar ACLs del dominio |
  
 ---
  
@@ -454,6 +509,7 @@ asrepuser : Welcome1!
  
 - [HackTricks — Active Directory Methodology](https://book.hacktricks.xyz/windows-hardening/active-directory-methodology)
 - [Impacket — GitHub](https://github.com/fortra/impacket)
+- [BloodHound CE — GitHub](https://github.com/SpecterOps/BloodHound)
 - [PayloadsAllTheThings — AD Attacks](https://github.com/swisskyrepo/PayloadsAllTheThings/blob/master/Methodology%20and%20Resources/Active%20Directory%20Attack.md)
 - [TarlogicSecurity — Kerberos Cheatsheet](https://gist.github.com/TarlogicSecurity/2f221924fef8c14a1d8e29f3cb5c5c4a)
 - [CrackMapExec Wiki](https://wiki.porchetta.industries)
