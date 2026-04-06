@@ -159,21 +159,27 @@ Set-ADAccountControl -Identity "asrepuser" -DoesNotRequirePreAuth $true
 ```
  
 ![ipconfig DC](./docs/screenshots/fase1-01-ipconfig.PNG)
+
 *IP estática asignada al DC — 192.168.100.10*
  
 ![Dominio activo](./docs/screenshots/fase1-02-domain-activo.PNG)
+
 *lab.local promovido correctamente*
  
 ![DCDiag OK](./docs/screenshots/fase1-03-dcdiag-ok.PNG)
+
 *Servicios del DC sin errores*
  
 ![DHCP](./docs/screenshots/fase1-04-dhcp-scope.PNG)
+
 *Scope DHCP activo — rango 192.168.100.100-200*
  
 ![SPN svc-sql](./docs/screenshots/fase1-05-spn-svc-sql.PNG)
+
 *Service account con SPN registrado — objetivo Kerberoasting*
  
 ![Usuarios AD](./docs/screenshots/fase1-06-usuarios-ad.PNG)
+
 *Usuarios del laboratorio creados y habilitados*
  
 ---
@@ -201,6 +207,7 @@ Set-MpPreference -DisableRealtimeMonitoring $true
 ```
  
 ![Equipos en AD](./docs/screenshots/fase2-03-computers-ad.png)
+
 *DC01, PC01 y PC02 registrados en el dominio*
  
 ---
@@ -215,6 +222,7 @@ nslookup lab.local 192.168.100.10
 ```
  
 ![Ping al DC](./docs/screenshots/fase3-02-ping-dc.png)
+
 *Conectividad con WIN-DC01 confirmada*
  
 ---
@@ -269,12 +277,15 @@ KRBTGT@LAB.LOCAL   → Kerberoastable (no explotable en la práctica)
 ```
  
 ![BloodHound collect](./docs/screenshots/fase4-01-bloodhound-collect.png)
+
 *bloodhound-python recopila 3 equipos, 8 usuarios y 52 grupos*
  
 ![BloodHound grafo](./docs/screenshots/fase4-02-bloodhound-graph.png)
+
 *Dominio LAB.LOCAL mapeado en BloodHound CE*
  
 ![Kerberoastable accounts](./docs/screenshots/fase4-03-kerberoastable.png)
+
 *Query Cypher identifica SVC-SQL como objetivo Kerberoastable*
  
 ### Mitigación
@@ -311,9 +322,11 @@ svc-sql : MYpassword123#
 ```
  
 ![Kerberoasting hash](./docs/screenshots/fase4-04-kerberoasting-hash.png)
+
 *TGS de svc-sql obtenido con credenciales de usuario estándar*
  
 ![Contraseña crackeada](./docs/screenshots/fase4-05-kerberoasting-cracked.png)
+
 *John the Ripper crackea MYpassword123# en segundos*
  
 ### Mitigación
@@ -349,9 +362,11 @@ crackmapexec smb 192.168.100.0/24 \
 ```
  
 ![Secretsdump hashes](./docs/screenshots/fase4-07-ntlm-hashes.png)
+
 *Hashes NTLM de todos los usuarios del dominio extraídos*
  
 ![Pass-the-Hash Pwn3d](./docs/screenshots/fase4-08-pass-the-hash.png)
+
 *Acceso como Domain Admin sin contraseña — Pwn3d!*
  
 ### Mitigación
@@ -388,9 +403,11 @@ asrepuser : Welcome1!
 ```
  
 ![AS-REP hash obtenido](./docs/screenshots/fase5-02-asrep-hash.png)
+
 *Hash obtenido sin ninguna credencial del dominio*
  
 ![AS-REP crackeado](./docs/screenshots/fase5-03-asrep-cracked.png)
+
 *Welcome1! crackeado con John the Ripper*
  
 ### Mitigación
@@ -426,9 +443,11 @@ krbtgt:502:aad3b435b51404eeaad3b435b51404ee:<NTLM_HASH>:::
 ```
  
 ![DCSync todos los hashes](./docs/screenshots/fase6-01-dcsync-all.png)
+
 *Replicación completa del dominio — todos los hashes extraídos*
  
 ![DCSync krbtgt](./docs/screenshots/fase6-03-dcsync-krbtgt.png)
+
 *Hash de krbtgt obtenido — base para Golden Ticket*
  
 ### Mitigación
